@@ -4,20 +4,51 @@ export const config = {
   runtime: 'edge',
 };
 
+// 拦截规则配置
+const REWRITE_CONFIG = {
+  // 基础链接
+  'a': 'href',
+  'area': 'href',
+  'link': 'href',
+  'script': 'src',
+  'form': 'action',
+  
+  // 媒体资源
+  'img': 'src',
+  'iframe': 'src',
+  'video': 'src',
+  'audio': 'src',
+  'source': 'src',
+  'embed': 'src',
+  'object': 'data',
+  'track': 'src',
+  
+  // ✨ GitHub 专属优化 (处理懒加载和动态内容)
+  'img': ['src', 'data-src', 'data-hi-res-src'], // 头像和高清图
+  'include-fragment': 'src', // GitHub 的动态加载块
+  'image-crop': 'src',       // 图片裁剪工具
+  'div': 'data-url',         // 部分动态组件
+};
+
 export default async function handler(request) {
   const url = new URL(request.url);
   const workerOrigin = url.origin;
   const pathRaw = url.pathname.slice(1) + url.search;
 
-  // --- 1. 首页处理 ---
+  // --- 1. 首页与快捷指令 ---
   if (url.pathname === '/' || url.pathname === '') {
     return handleHome(workerOrigin);
+  }
+  
+  // 快捷指令: 输入 /gh 直接跳转 GitHub
+  if (pathRaw === 'gh' || pathRaw === 'github') {
+    return Response.redirect(`${workerOrigin}/https://github.com`, 302);
   }
 
   // --- 2. 解析目标 URL ---
   let targetUrlStr = pathRaw;
   
-  // 智能修正：如果不是以 http 开头，尝试通过 Referer 自动补全
+  // 智能修正 Referer (防止 CSS/JS 404)
   if (!targetUrlStr.startsWith('http')) {
     const referer = request.headers.get('Referer');
     if (referer && referer.startsWith(workerOrigin)) {
@@ -26,18 +57,19 @@ export default async function handler(request) {
         const refererTargetStr = refererUrl.pathname.slice(1) + refererUrl.search;
         if (refererTargetStr.startsWith('http')) {
           const refererTarget = new URL(refererTargetStr);
-          targetUrlStr = refererTarget.origin + url.pathname + url.search;
+          // 拼接相对路径
+          targetUrlStr = new URL(targetUrlStr, refererTarget.href).href;
         }
       } catch(e) {}
     }
   }
 
-  // 再次检查，如果还没解析出来，就默认跳回首页
+  // 还没解析出来？回首页
   if (!targetUrlStr.startsWith('http')) {
      return handleHome(workerOrigin);
   }
 
-  // --- 3. 发起代理请求 ---
+  // --- 3. 发起请求 ---
   let targetUrl;
   try {
     targetUrl = new URL(targetUrlStr);
@@ -45,13 +77,13 @@ export default async function handler(request) {
     return new Response('无效网址', { status: 400 });
   }
 
-  // 重写请求头，伪装成浏览器直接访问
   const proxyHeaders = new Headers(request.headers);
   proxyHeaders.set('Host', targetUrl.hostname);
   proxyHeaders.set('Referer', targetUrl.href);
   proxyHeaders.set('Origin', targetUrl.origin);
-  // 删除 Vercel 特有头，防止暴露
-  ['x-vercel-id', 'x-vercel-forwarded-for', 'x-forwarded-for'].forEach(h => proxyHeaders.delete(h));
+  proxyHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'); // 伪装 User-Agent 防止被 GitHub 拦截
+  
+  ['x-vercel-id', 'x-vercel-forwarded-for', 'x-forwarded-for', 'via'].forEach(h => proxyHeaders.delete(h));
 
   try {
     const proxyRes = await fetch(targetUrl, {
@@ -61,11 +93,14 @@ export default async function handler(request) {
       redirect: 'manual'
     });
 
-    // --- 4. 处理响应 ---
+    // --- 4. 响应处理 ---
     const resHeaders = new Headers(proxyRes.headers);
     resHeaders.set('Access-Control-Allow-Origin', '*');
-    
-    // 修正重定向路径
+    resHeaders.delete('content-security-policy'); // 关键：移除 GitHub 严格的安全策略
+    resHeaders.delete('content-security-policy-report-only');
+    resHeaders.delete('clear-site-data');
+
+    // 处理重定向
     if (resHeaders.has('Location')) {
       let loc = resHeaders.get('Location');
       if (loc.startsWith('http')) {
@@ -75,29 +110,23 @@ export default async function handler(request) {
       }
     }
 
-    // 修正 Cookie 域限制
-    if (resHeaders.has('Set-Cookie')) {
-       resHeaders.set('Set-Cookie', resHeaders.get('Set-Cookie').replace(/Domain=[^;]+;/gi, ''));
-    }
-
-    // HTML 内容重写 (核心：把页面里的链接都替换掉)
+    // HTML 重写 (核心优化部分)
     const contentType = resHeaders.get('Content-Type');
     if (contentType && contentType.includes('text/html')) {
       let rewriter = new HTMLRewriter();
-      const tags = {
-        'a': 'href', 'img': 'src', 'link': 'href', 'script': 'src', 
-        'form': 'action', 'iframe': 'src'
-      };
       
-      for (const [tag, attr] of Object.entries(tags)) {
+      // 遍历配置进行重写
+      for (const [tag, attrs] of Object.entries(REWRITE_CONFIG)) {
+        const attrList = Array.isArray(attrs) ? attrs : [attrs];
         rewriter.on(tag, {
           element(element) {
-            const val = element.getAttribute(attr);
-            if (val) {
-              // 简单暴力的替换逻辑
-              if (val.startsWith('http')) element.setAttribute(attr, `${workerOrigin}/${val}`);
-              else if (val.startsWith('//')) element.setAttribute(attr, `${workerOrigin}/https:${val}`);
-              else if (val.startsWith('/')) element.setAttribute(attr, `${workerOrigin}/${targetUrl.origin}${val}`);
+            for (const attr of attrList) {
+              const val = element.getAttribute(attr);
+              if (val) {
+                if (val.startsWith('http')) element.setAttribute(attr, `${workerOrigin}/${val}`);
+                else if (val.startsWith('//')) element.setAttribute(attr, `${workerOrigin}/https:${val}`);
+                else if (val.startsWith('/')) element.setAttribute(attr, `${workerOrigin}/${targetUrl.origin}${val}`);
+              }
             }
           }
         });
@@ -112,18 +141,33 @@ export default async function handler(request) {
   }
 }
 
-// 简单的中文首页
+// 界面增加 GitHub 快捷方式
 function handleHome(origin) {
   const html = `
     <!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>极简 Vercel 代理</title>
-    <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;background:#f5f5f5}
-    .box{background:#fff;padding:2rem;border-radius:10px;box-shadow:0 4px 10px rgba(0,0,0,0.1);text-align:center;width:90%;max-width:400px}
-    input{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;box-sizing:border-box}
-    button{width:100%;padding:10px;background:#000;color:#fff;border:none;border-radius:5px;cursor:pointer}
+    <title>GitHub 优化版代理</title>
+    <style>
+      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;background:#0d1117;color:#c9d1d9}
+      .box{background:#161b22;padding:2rem;border-radius:6px;border:1px solid #30363d;text-align:center;width:90%;max-width:400px}
+      h3{color:#fff;margin-top:0}
+      input{width:100%;padding:10px;margin:15px 0;border:1px solid #30363d;border-radius:6px;box-sizing:border-box;background:#0d1117;color:#fff}
+      button{width:100%;padding:10px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+      button:hover{background:#2ea043}
+      .quick{margin-top:15px;font-size:12px}
+      .quick a{color:#58a6ff;text-decoration:none;margin:0 5px}
     </style></head>
-    <body><div class="box"><h3>🚀 Vercel Proxy</h3>
-    <form onsubmit="event.preventDefault();var u=document.getElementById('u').value.trim();if(u){window.location.href='${origin}/'+(u.startsWith('http')?u:'https://'+u)}">
-    <input id="u" placeholder="输入网址 (如 google.com)" required><button>访问</button></form></div></body></html>`;
+    <body><div class="box">
+      <h3>🐙 GitHub Proxy</h3>
+      <form onsubmit="event.preventDefault();var u=document.getElementById('u').value.trim();if(u){window.location.href='${origin}/'+(u.startsWith('http')?u:'https://'+u)}">
+      <input id="u" placeholder="输入网址..." required>
+      <button>Go</button>
+      </form>
+      <div class="quick">
+        快捷跳转: 
+        <a href="${origin}/https://github.com">GitHub</a>
+        <a href="${origin}/https://raw.githubusercontent.com">Raw</a>
+        <a href="${origin}/https://www.google.com">Google</a>
+      </div>
+    </div></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html' } });
 }
