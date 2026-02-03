@@ -1,3 +1,9 @@
+// api/index.js
+// 核心逻辑文件
+
+// 👇 这一行就是关键：从 ui.js 引入界面函数
+import { handleHome } from './ui.js';
+
 export const config = {
   runtime: 'edge',
 };
@@ -8,6 +14,7 @@ export default async function handler(request) {
   const pathRaw = url.pathname.slice(1) + url.search;
 
   // --- 1. 首页处理 ---
+  // 如果没有路径，直接调用 ui.js 里的函数显示界面
   if (url.pathname === '/' || url.pathname === '') {
     return handleHome(workerOrigin);
   }
@@ -50,7 +57,6 @@ export default async function handler(request) {
   proxyHeaders.set('Origin', targetUrl.origin);
   proxyHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
   
-  // 删除 Vercel 特有头
   ['x-vercel-id', 'x-vercel-forwarded-for', 'x-forwarded-for', 'via'].forEach(h => proxyHeaders.delete(h));
 
   try {
@@ -68,7 +74,6 @@ export default async function handler(request) {
     resHeaders.delete('content-security-policy-report-only');
     resHeaders.delete('clear-site-data');
 
-    // 修正重定向
     if (resHeaders.has('Location')) {
       let loc = resHeaders.get('Location');
       if (loc.startsWith('http')) {
@@ -78,33 +83,18 @@ export default async function handler(request) {
       }
     }
 
-    // 修正 Cookie
     if (resHeaders.has('Set-Cookie')) {
        resHeaders.set('Set-Cookie', resHeaders.get('Set-Cookie').replace(/Domain=[^;]+;/gi, ''));
     }
 
     const contentType = resHeaders.get('Content-Type');
-    
-    // 如果是 HTML，使用文本替换 (Regex) 而不是 HTMLRewriter
     if (contentType && contentType.includes('text/html')) {
       let text = await proxyRes.text();
       const origin = targetUrl.origin;
       
-      // 简单的正则替换：寻找 href="...", src="..." 等
-      // 1. 绝对路径 http... -> 代理路径
-      text = text.replace(/(href|src|action|data-src) déplacement=["'](http[^"']+)["']/g, (match, attr, url) => {
-        return `${attr}="${workerOrigin}/${url}"`;
-      });
-      
-      // 2. 相对路径 /path... -> 代理路径/原域/path
-      text = text.replace(/(href|src|action|data-src) déplacement=["'](\/[^/][^"']*)["']/g, (match, attr, path) => {
-        return `${attr}="${workerOrigin}/${origin}${path}"`;
-      });
-      
-      // 3. 协议相对路径 //domain... -> 代理路径/https:domain
-      text = text.replace(/(href|src|action|data-src) déplacement=["'](\/\/[^"']+)["']/g, (match, attr, url) => {
-        return `${attr}="${workerOrigin}/https:${url}"`;
-      });
+      text = text.replace(/(href|src|action|data-src) déplacement=["'](http[^"']+)["']/g, `$1="${workerOrigin}/$2"`);
+      text = text.replace(/(href|src|action|data-src) déplacement=["'](\/[^/][^"']*)["']/g, `$1="${workerOrigin}/${origin}$2"`);
+      text = text.replace(/(href|src|action|data-src) déplacement=["'](\/\/[^"']+)["']/g, `$1="${workerOrigin}/https:$2"`);
 
       return new Response(text, { status: proxyRes.status, headers: resHeaders });
     }
@@ -114,18 +104,4 @@ export default async function handler(request) {
   } catch (e) {
     return new Response(`Error: ${e.message}`, { status: 500 });
   }
-}
-
-function handleHome(origin) {
-  const html = `
-    <!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Vercel 零依赖代理</title>
-    <style>body{font-family:sans-serif;background:#000;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh}
-    .box{text-align:center;border:1px solid #333;padding:2rem;border-radius:10px}
-    input{padding:10px;width:100%;margin:10px 0;border-radius:5px;border:none}
-    button{padding:10px 20px;background:#fff;color:#000;border:none;border-radius:5px;cursor:pointer;font-weight:bold}</style>
-    </head><body><div class="box"><h3>⚡ Zero Proxy</h3>
-    <form onsubmit="event.preventDefault();var u=document.getElementById('u').value;window.location.href='${origin}/'+(u.startsWith('http')?u:'https://'+u)">
-    <input id="u" placeholder="google.com" required><button>Go</button></form></div></body></html>`;
-  return new Response(html, { headers: { 'content-type': 'text/html' } });
 }
