@@ -1,0 +1,86 @@
+// api/ui.js
+//这里专门存放界面代码
+
+export function handleHome(origin) {
+  // 👇 在这里修改背景图
+  const BG_IMG = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?q=80&w=2940&auto=format&fit=crop'; 
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>无界 | Borderless Proxy</title>
+      <style>
+        :root {
+          --glass-bg: rgba(255, 255, 255, 0.1);
+          --glass-border: rgba(255, 255, 255, 0.2);
+          --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+          --primary-color: #6366f1;
+        }
+        body {
+          margin: 0; min-height: 100vh;
+          display: flex; justify-content: center; align-items: center;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          color: white;
+          background: url('${BG_IMG}') no-repeat center center fixed;
+          background-size: cover;
+        }
+        body::before {
+          content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0, 0, 0, 0.4); z-index: -1;
+        }
+        .glass-card {
+          background: var(--glass-bg);
+          backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+          border: 1px solid var(--glass-border);
+          box-shadow: var(--glass-shadow);
+          padding: 3rem; border-radius: 24px;
+          width: 90%; max-width: 480px; text-align: center;
+          animation: fadeInUp 0.8s ease-out;
+        }
+        h1 { margin: 0 0 10px; font-weight: 200; letter-spacing: 4px; font-size: 28px; text-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+        p.subtitle { font-size: 14px; opacity: 0.8; margin-bottom: 2rem; font-weight: 300; }
+        .input-group { position: relative; margin-bottom: 20px; }
+        input {
+          width: 100%; padding: 16px 20px; border: 1px solid rgba(255, 255, 255, 0.3);
+          border-radius: 50px; background: rgba(0, 0, 0, 0.2);
+          color: white; font-size: 16px; outline: none;
+          transition: all 0.3s ease; box-sizing: border-box; text-align: center;
+        }
+        input::placeholder { color: rgba(255, 255, 255, 0.6); }
+        input:focus { background: rgba(0, 0, 0, 0.4); border-color: rgba(255, 255, 255, 0.8); box-shadow: 0 0 15px rgba(255, 255, 255, 0.1); }
+        button {
+          padding: 14px 40px; border-radius: 50px; border: none;
+          background: white; color: #333; font-weight: bold; font-size: 16px; cursor: pointer;
+          transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 100%;
+        }
+        button:hover { transform: translateY(-2px); background: var(--primary-color); color: white; box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4); }
+        .quick-links { margin-top: 2rem; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; }
+        .quick-links a { color: rgba(255, 255, 255, 0.7); text-decoration: none; font-size: 13px; transition: 0.2s; border-bottom: 1px solid transparent; }
+        .quick-links a:hover { color: white; border-bottom-color: white; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+      </style>
+    </head>
+    <body>
+      <div class="glass-card">
+        <h1>UNBOUND</h1>
+        <p class="subtitle">Secure & Fast Proxy Gateway</p>
+        <form onsubmit="event.preventDefault();var u=document.getElementById('u').value.trim();if(u){window.location.href='${origin}/'+(u.startsWith('http')?u:'https://'+u)}">
+          <div class="input-group">
+            <input id="u" type="text" placeholder="输入目标网址 (e.g. google.com)" required autocomplete="off">
+          </div>
+          <button type="submit">立即访问</button>
+        </form>
+        <div class="quick-links">
+          <a href="${origin}/https://google.com">Google</a>
+          <a href="${origin}/https://github.com">GitHub</a>
+          <a href="${origin}/https://youtube.com">YouTube</a>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  return new Response(html, { headers: { 'content-type': 'text/html;charset=UTF-8' } });
+}
